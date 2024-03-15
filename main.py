@@ -21,7 +21,7 @@ class Responses:
     suggestion = "Thank you for your suggestion. I have logged it for review."
     invalidSubreddit = "Thank you for your message however, the subreddit you mentioned (*) does not appear to be a" \
                        " valid subreddit"
-    invalidSubject = "I am a bot and unfortunately could not decipher your subject. Please see ?? for a guide on how " \
+    invalidCommand = "I am a bot and unfortunately could not decipher your subject. Please see ?? for a guide on how " \
                      "to message me"
     unauthorised = "I understood your request however, it does not appear you are a moderator of *"
 
@@ -38,20 +38,20 @@ class ItsPaddysDayDB:
         return True
 
     @staticmethod
-    def get_sub(sub: str):
+    def get_sub(sub: praw.models.Subreddit):
         """Todo: get data from database"""
         return True
 
     @staticmethod
-    def blacklist_sub(sub: str):
+    def blacklist_sub(sub: praw.models.Subreddit):
         return True
 
     @staticmethod
-    def whitelist_sub(sub: str):
+    def whitelist_sub(sub: praw.models.Subreddit):
         return True
 
     @staticmethod
-    def blacklist_user(sub: str):
+    def blacklist_user(sub: praw.models.Subreddit):
         return True
 
     @staticmethod
@@ -124,7 +124,7 @@ class ItsPaddysDay:
             return False
 
     @staticmethod
-    def _parse_subject(subject: str) -> tuple[str | None, str | None]:
+    def _parse_command(subject: str) -> tuple[str | None, str | None]:
         action, subreddit = None, None
 
         match = re.search(r'\B!([a-zA-Z:]+)\b', subject)
@@ -140,71 +140,64 @@ class ItsPaddysDay:
 
         return action, subreddit
 
-    def _process_actions(self, message: praw.models.Message, action: str, sub: str) -> str:
+    def _perform_action(self, message: praw.models.Message, action: str, sub: str) -> str:
 
         if action.lower() not in self.actionMap:
-            response = Responses.invalidSubject
+            response = Responses.invalidCommand
 
         else:
             subr = self.reddit.subreddit(sub) if self._is_valid_sub(sub) else None
+
             if actionMethod := ItsPaddysDay.actionMap.get(action):
                 response = actionMethod(message=message, sub=subr)
             else:
-                response = Responses.invalidSubject
+                response = Responses.invalidCommand
 
         return response
 
-    def _process_mentions(self, message: praw.models.Message) -> None:
-        """Performs action based on mention"""
+    def _process_mention(self, message: praw.models.Message) -> str:
+
         sub = message.subreddit.display_name
-        body = message.body
-        author = message.author
-
-        if (knownSub := ItsPaddysDayDB.get_sub(sub)):
-            pass
-            # if knownSub.isBlacklisted:
-            #     pass
-
-        console.log(f"\nMention in: {sub} \nAction:")
-
-    def _process_direct_message(self, message: praw.models.Message) -> None:
-
-        action, sub = self._parse_subject(message.subject)
+        action, _ = ItsPaddysDay._parse_command(message.body)
 
         if not action:
-            response = Responses.invalidSubject
+            ItsPaddysDayDB.add_sub(sub)
+            response = Responses.whitelistSub.replace("*", sub)
+        else:
+            response = self._perform_action(message, action, sub)
+
+        return response
+
+    def _process_direct_message(self, message: praw.models.Message) -> str:
+
+        action, sub = ItsPaddysDay._parse_command(message.subject)
+
+        if not action:
+            response = Responses.invalidCommand
 
         else:
-            response = self._process_actions(message, action, sub)
+            response = self._perform_action(message, action, sub)
 
-        console.log(f"subject: {message.subject} \nResponse: {response}\n")
-
-        # message.reply(response)
-
-        # message.mark_read()
+        return response
 
     def process_unread_messages(self) -> None:
-        """ Checks messages for mentions to control which subreddits are searched for comments
 
-        To do:
-        - Check mentions:
-            - Check if mention is in a new subreddit, if so, add it to whitelist (use keyword in mention?)
-            - Check if mention contains keywords to blacklist subreddit and is posted by moderator
-            - check if mention contains keywords to un-blacklist subreddit and is posted by moderator
-        - Check direct messages:
-            - Check if message contains keywords to blacklist subreddit and is posted by moderator
-            - check if message contains keywords to un-blacklist subreddit and is posted by moderator
-        """
         console.log("Processing Unread Messages:")
         processedMessages = 0
 
         for message in self.reddit.inbox.unread():
 
             if message.was_comment:
-                self._process_mentions(message)
+                response = self._process_mention(message)
 
             else:
-                self._process_direct_message(message)
+                response = self._process_direct_message(message)
+
+            console.log(f"subject: {message.subject} \nResponse: {response}\n")
+
+            # message.reply(response)
+
+            # message.mark_read()
 
             processedMessages += 1
 
