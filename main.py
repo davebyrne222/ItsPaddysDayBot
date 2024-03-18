@@ -1,23 +1,12 @@
 import json
 import re
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import praw
 import prawcore
 
 from secret import Configuration
-
-
-@dataclass
-class TmpDataDict:
-    blacklistedSubs: list = field(default_factory=lambda: [])
-    whitelistedSubs: list = field(default_factory=lambda: [])
-    blacklistedUsers: list = field(default_factory=lambda: [])
-    respondedPosts: list = field(default_factory=lambda: [])
-
-    def asdict(self):
-        return asdict(self)
 
 
 @dataclass
@@ -37,39 +26,89 @@ class Responses:
 
 class DB:
 
-    @staticmethod
-    def add_sub(sub: praw.models.Subreddit):
-        """Todo: get data from database"""
-        return True
+    def __init__(self):
+        self.blacklistedSubs: list = field(default_factory=lambda: [])
+        self.whitelistedSubs: list = field(default_factory=lambda: [])
+        self.blacklistedUsers: list = field(default_factory=lambda: [])
+        self.respondedPosts: list = field(default_factory=lambda: [])
 
-    @staticmethod
-    def get_sub(sub: praw.models.Subreddit):
-        """Todo: get data from database"""
-        return True
+        self.tmpLoadData()
 
-    @staticmethod
-    def blacklist_sub(sub: praw.models.Subreddit):
-        if sub.display_name not in tmpDataDict.blacklistedSubs:
-            tmpDataDict.blacklistedSubs.append(sub.display_name)
+    def tmpLoadData(self):
+        with open("data.json", "r") as fi:
+            data = json.load(fi)
 
-    @staticmethod
-    def whitelist_sub(sub: praw.models.Subreddit):
-        if sub.display_name not in tmpDataDict.whitelistedSubs:
-            tmpDataDict.whitelistedSubs.append(sub.display_name)
+        self.blacklistedSubs = data.get("blacklistedSubs")
+        self.whitelistedSubs = data.get("whitelistedSubs")
+        self.blacklistedUsers = data.get("blacklistedUsers")
+        self.respondedPosts = data.get("respondedPosts")
 
-    @staticmethod
-    def blacklist_user(user: praw.models.Redditor):
-        if user.id not in tmpDataDict.blacklistedUsers:
-            tmpDataDict.blacklistedUsers.append(user.id)
+        logger.debug(f"Data loaded")
 
-    @staticmethod
-    def is_user_blacklisted(userId: str):
-        return userId in tmpDataDict.blacklistedUsers
+    def __del__(self):
+        data = dict(
+            blacklistedSubs = self.blacklistedSubs,
+            whitelistedSubs = self.whitelistedSubs,
+            blacklistedUsers = self.blacklistedUsers,
+            respondedPosts = self.respondedPosts
+        )
+
+        with open("data.json", "w") as fo:
+            json.dump(data, fo)
+
+        logger.debug(f"Data written to file")
+
+    def blacklist_sub(self, sub: praw.models.Subreddit):
+        if sub.display_name not in self.blacklistedSubs:
+            self.blacklistedSubs.append(sub.display_name)
+
+    def get_blacklisted_subs(self):
+        return self.blacklistedSubs
+
+    def whitelist_sub(self, sub: praw.models.Subreddit):
+        if sub.display_name not in self.whitelistedSubs:
+            self.whitelistedSubs.append(sub.display_name)
+
+    def get_whitelisted_subs(self):
+        return self.whitelistedSubs
+
+    def blacklist_user(self, user: praw.models.Redditor):
+        if user.id not in self.blacklistedUsers:
+            self.blacklistedUsers.append(user.id)
+
+    def add_responded_post(self, postId: str):
+        if postId not in self.respondedPosts:
+            self.respondedPosts.append(postId)
+
+    def is_post_responded(self, postId: str):
+        return postId in self.respondedPosts
+
+    def is_user_blacklisted(self, userId: str):
+        return userId in self.blacklistedUsers
 
 
 class _Bot:
-    @staticmethod
-    def _manage_monitored_subs(action: str, message: praw.models.Message, sub: praw.models.Subreddit):
+    def __init__(self,
+                 reddit_user_name: str,
+                 reddit_password: str,
+                 reddit_client_id: str,
+                 reddit_secret: str,
+                 reddit_user_agent: str,
+                 ratelimit_seconds: int
+                 ):
+
+        self.reddit = praw.Reddit(
+            username=reddit_user_name,
+            password=reddit_password,
+            client_id=reddit_client_id,
+            client_secret=reddit_secret,
+            user_agent=reddit_user_agent,
+            ratelimit_seconds=ratelimit_seconds
+        )
+        self._db = DB()
+
+
+    def _manage_monitored_subs(self, action: str, message: praw.models.Message, sub: praw.models.Subreddit):
 
         if not isinstance(sub, praw.models.Subreddit):
             response = Responses.invalidSubreddit
@@ -78,11 +117,11 @@ class _Bot:
             response = Responses.unauthorised
 
         elif action == "whitelist":
-            DB.whitelist_sub(sub)
+            self._db.whitelist_sub(sub)
             response = Responses.whitelistSub
 
         elif action == "blacklist":
-            DB.blacklist_sub(sub)
+            self._db.blacklist_sub(sub)
             response = Responses.blacklistSub
 
         else:
@@ -90,22 +129,19 @@ class _Bot:
 
         return response.replace("*", sub.display_name)
 
-    @staticmethod
-    def _handle_blacklist(message: praw.models.Message, sub: praw.models.Subreddit):
-        ItsPaddysDaySync._manage_monitored_subs("blacklist", message, sub)
+    def _handle_blacklist(self, message: praw.models.Message, sub: praw.models.Subreddit):
+        self._manage_monitored_subs("blacklist", message, sub)
 
-    @staticmethod
-    def _handle_whitelist(message: praw.models.Message, sub: praw.models.Subreddit):
-        ItsPaddysDaySync._manage_monitored_subs("whitelist", message, sub)
+    def _handle_whitelist(self, message: praw.models.Message, sub: praw.models.Subreddit):
+        self._manage_monitored_subs("whitelist", message, sub)
 
     @staticmethod
     def _handle_suggestion(message: praw.models.Message, sub: praw.models.Subreddit):
         # TODO: send message to LevelIntro?
         return Responses.suggestion
 
-    @staticmethod
-    def _handle_ignoreme(message: praw.models.Message, sub: praw.models.Subreddit):
-        DB.blacklist_user(message.author.id)
+    def _handle_ignoreme(self, message: praw.models.Message, sub: praw.models.Subreddit):
+        self._db.blacklist_user(message.author.id)
         return Responses.blacklistUser
 
     actionMap = {
@@ -166,19 +202,19 @@ class _Bot:
             response = self._perform_action(message, action, sub)
 
         else:
-            DB.whitelist_sub(message.subreddit)
+            self._db.whitelist_sub(message.subreddit)
             response = Responses.whitelistSub.replace("*", sub)
 
             if not conf.dryrun:
-                tmpDataDict.respondedPosts.append(message.id)
+                self._db.add_responded_post(message.id)
 
             # get parent comment and send to _process_submission
             parent = message.parent()
-            ItsPaddysDaySync._process_submission(parent)
+            self._process_submission(parent)
 
             # get parent replies and send to _process_submission
             for comment in parent.comments:
-                ItsPaddysDaySync._process_submission(comment)
+                self._process_submission(comment)
 
         return response
 
@@ -204,13 +240,12 @@ class _Bot:
             return True
         return False
 
-    @staticmethod
-    def _process_submission(submission):
+    def _process_submission(self, submission):
 
         logger.info(
             f"{submission.subreddit_name_prefixed}, {datetime.fromtimestamp(submission.created_utc)}, {submission.id}, https://www.reddit.com{submission.permalink}")
 
-        if submission.id in tmpDataDict.respondedPosts:
+        if self._db.is_post_responded(submission.id):
             return
 
         searchStr = ""
@@ -226,28 +261,13 @@ class _Bot:
             return
 
         submission.reply(Responses.correction)
-        tmpDataDict.respondedPosts.append(submission.id)
+        self._db.add_responded_post(submission.id)
 
 
 class ItsPaddysDaySync(_Bot):
 
-    def __init__(self,
-                 reddit_user_name: str,
-                 reddit_password: str,
-                 reddit_client_id: str,
-                 reddit_secret: str,
-                 reddit_user_agent: str,
-                 ratelimit_seconds: int
-                 ):
-
-        self.reddit = praw.Reddit(
-            username=reddit_user_name,
-            password=reddit_password,
-            client_id=reddit_client_id,
-            client_secret=reddit_secret,
-            user_agent=reddit_user_agent,
-            ratelimit_seconds=ratelimit_seconds
-        )
+    def __init__(self, *args):
+        super().__init__(*args)
 
     def process_unread_messages(self) -> None:
         logger.info(f"------------------------------")
@@ -278,7 +298,7 @@ class ItsPaddysDaySync(_Bot):
         subr = self.reddit.subreddit(subreddit)
 
         for submission in subr.new():
-            ItsPaddysDaySync._process_submission(submission)
+            self._process_submission(submission)
 
     def process_subreddit_comments(self, subreddit: str) -> None:
         logger.info(f"------------------------------")
@@ -289,7 +309,7 @@ class ItsPaddysDaySync(_Bot):
         subr = self.reddit.subreddit(subreddit)
 
         for submission in subr.comments(limit=None):
-            ItsPaddysDaySync._process_submission(submission)
+            self._process_submission(submission)
 
 
 def run_bot() -> None:
@@ -305,30 +325,11 @@ def run_bot() -> None:
     # check messages
     bot.process_unread_messages()
 
-    return
-
     # check posts
-    bot.process_subreddit_posts("+".join(tmpDataDict.whitelistedSubs))
+    bot.process_subreddit_posts("+".join(bot._db.get_whitelisted_subs()))
 
     # check comments
-    bot.process_subreddit_comments("+".join(tmpDataDict.whitelistedSubs))
-
-
-def loadData():
-    with open("data.json", "r") as fi:
-        data = json.load(fi)
-
-    tmpDataDict.blacklistedSubs = data.get("blacklistedSubs")
-    tmpDataDict.whitelistedSubs = data.get("whitelistedSubs")
-    tmpDataDict.blacklistedUsers = data.get("blacklistedUsers")
-    tmpDataDict.respondedPosts = data.get("respondedPosts")
-
-
-def dumpData():
-    dataDict = tmpDataDict.asdict()
-
-    with open("data.json", "w") as fo:
-        json.dump(dataDict, fo)
+    bot.process_subreddit_comments("+".join(bot._db.get_whitelisted_subs()))
 
 
 if __name__ == "__main__":
@@ -342,10 +343,6 @@ if __name__ == "__main__":
         with open("correction_text.md", "r") as file:
             Responses.correction = file.read()
 
-        tmpDataDict = TmpDataDict()
-
-        loadData()
-
         run_bot()
 
     except praw.exceptions.RedditAPIException as e:
@@ -356,8 +353,4 @@ if __name__ == "__main__":
 
     else:
         logger.debug(f"Finished Successfully")
-
-    finally:
-        dumpData()
-        logger.debug(f"Data written to file")
 
