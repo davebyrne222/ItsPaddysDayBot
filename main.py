@@ -2,7 +2,7 @@ import praw
 
 from bot import ItsPaddysDay
 from logger import logger
-from secret import Configuration
+from config import Configuration
 
 
 def run_bot() -> None:

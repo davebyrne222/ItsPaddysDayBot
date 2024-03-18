@@ -1,5 +1,5 @@
 # Project specific
-secret.py
+config.py
 *.pem
 deploy.sh
 *.txt
