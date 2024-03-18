@@ -1,12 +1,13 @@
-import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 import praw
 import prawcore
 
+from logger import logger
 from secret import Configuration
+from db import DB
 
 
 @dataclass
@@ -22,69 +23,6 @@ class Responses:
                      "to message me"
     unauthorised = "I understood your request however, it does not appear you are a moderator of *"
     correction = "Mo Chara, I think you might be referring to St. Patricks Day, however the correct shorthand spelling is St. Paddy. \n\n I'm a bot"
-
-
-class DB:
-
-    def __init__(self):
-        self.blacklistedSubs: list = field(default_factory=lambda: [])
-        self.whitelistedSubs: list = field(default_factory=lambda: [])
-        self.blacklistedUsers: list = field(default_factory=lambda: [])
-        self.respondedPosts: list = field(default_factory=lambda: [])
-
-        self.tmpLoadData()
-
-    def tmpLoadData(self):
-        with open("data.json", "r") as fi:
-            data = json.load(fi)
-
-        self.blacklistedSubs = data.get("blacklistedSubs")
-        self.whitelistedSubs = data.get("whitelistedSubs")
-        self.blacklistedUsers = data.get("blacklistedUsers")
-        self.respondedPosts = data.get("respondedPosts")
-
-        logger.debug(f"Data loaded")
-
-    def __del__(self):
-        data = dict(
-            blacklistedSubs = self.blacklistedSubs,
-            whitelistedSubs = self.whitelistedSubs,
-            blacklistedUsers = self.blacklistedUsers,
-            respondedPosts = self.respondedPosts
-        )
-
-        with open("data.json", "w") as fo:
-            json.dump(data, fo)
-
-        logger.debug(f"Data written to file")
-
-    def blacklist_sub(self, sub: praw.models.Subreddit):
-        if sub.display_name not in self.blacklistedSubs:
-            self.blacklistedSubs.append(sub.display_name)
-
-    def get_blacklisted_subs(self):
-        return self.blacklistedSubs
-
-    def whitelist_sub(self, sub: praw.models.Subreddit):
-        if sub.display_name not in self.whitelistedSubs:
-            self.whitelistedSubs.append(sub.display_name)
-
-    def get_whitelisted_subs(self):
-        return self.whitelistedSubs
-
-    def blacklist_user(self, user: praw.models.Redditor):
-        if user.id not in self.blacklistedUsers:
-            self.blacklistedUsers.append(user.id)
-
-    def add_responded_post(self, postId: str):
-        if postId not in self.respondedPosts:
-            self.respondedPosts.append(postId)
-
-    def is_post_responded(self, postId: str):
-        return postId in self.respondedPosts
-
-    def is_user_blacklisted(self, userId: str):
-        return userId in self.blacklistedUsers
 
 
 class _Bot:
@@ -106,7 +44,6 @@ class _Bot:
             ratelimit_seconds=ratelimit_seconds
         )
         self._db = DB()
-
 
     def _manage_monitored_subs(self, action: str, message: praw.models.Message, sub: praw.models.Subreddit):
 
@@ -338,7 +275,6 @@ if __name__ == "__main__":
 
     conf = Configuration()
 
-    logger = conf.setup_logging()
     logger.debug(f"Starting")
 
     try:
