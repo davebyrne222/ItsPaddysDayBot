@@ -35,7 +35,7 @@ class Responses:
     correction = "Mo Chara, I think you might be referring to St. Patricks Day, however the correct shorthand spelling is St. Paddy. \n\n I'm a bot"
 
 
-class ItsPaddysDayDB:
+class DB:
 
     @staticmethod
     def add_sub(sub: praw.models.Subreddit):
@@ -67,41 +67,22 @@ class ItsPaddysDayDB:
         return userId in tmpDataDict.blacklistedUsers
 
 
-class ItsPaddysDay:
-
-    def __init__(self,
-                 reddit_user_name: str,
-                 reddit_password: str,
-                 reddit_client_id: str,
-                 reddit_secret: str,
-                 reddit_user_agent: str,
-                 ratelimit_seconds: int
-                 ):
-
-        self.reddit = praw.Reddit(
-            username=reddit_user_name,
-            password=reddit_password,
-            client_id=reddit_client_id,
-            client_secret=reddit_secret,
-            user_agent=reddit_user_agent,
-            ratelimit_seconds=ratelimit_seconds
-        )
-
+class _Bot:
     @staticmethod
     def _manage_monitored_subs(action: str, message: praw.models.Message, sub: praw.models.Subreddit):
 
         if not isinstance(sub, praw.models.Subreddit):
             response = Responses.invalidSubreddit
 
-        elif not ItsPaddysDay._is_author_mod(message.author, sub):
+        elif not ItsPaddysDaySync._is_author_mod(message.author, sub):
             response = Responses.unauthorised
 
         elif action == "whitelist":
-            ItsPaddysDayDB.whitelist_sub(sub)
+            DB.whitelist_sub(sub)
             response = Responses.whitelistSub
 
         elif action == "blacklist":
-            ItsPaddysDayDB.blacklist_sub(sub)
+            DB.blacklist_sub(sub)
             response = Responses.blacklistSub
 
         else:
@@ -111,11 +92,11 @@ class ItsPaddysDay:
 
     @staticmethod
     def _handle_blacklist(message: praw.models.Message, sub: praw.models.Subreddit):
-        ItsPaddysDay._manage_monitored_subs("blacklist", message, sub)
+        ItsPaddysDaySync._manage_monitored_subs("blacklist", message, sub)
 
     @staticmethod
     def _handle_whitelist(message: praw.models.Message, sub: praw.models.Subreddit):
-        ItsPaddysDay._manage_monitored_subs("whitelist", message, sub)
+        ItsPaddysDaySync._manage_monitored_subs("whitelist", message, sub)
 
     @staticmethod
     def _handle_suggestion(message: praw.models.Message, sub: praw.models.Subreddit):
@@ -124,7 +105,7 @@ class ItsPaddysDay:
 
     @staticmethod
     def _handle_ignoreme(message: praw.models.Message, sub: praw.models.Subreddit):
-        ItsPaddysDayDB.blacklist_user(message.author.id)
+        DB.blacklist_user(message.author.id)
         return Responses.blacklistUser
 
     actionMap = {
@@ -169,7 +150,7 @@ class ItsPaddysDay:
         else:
             subr = self.reddit.subreddit(sub) if self._is_valid_sub(sub) else None
 
-            if actionMethod := ItsPaddysDay.actionMap.get(action):
+            if actionMethod := ItsPaddysDaySync.actionMap.get(action):
                 response = actionMethod(message=message, sub=subr)
             else:
                 response = Responses.invalidCommand
@@ -179,19 +160,31 @@ class ItsPaddysDay:
     def _process_mention(self, message: praw.models.Message) -> str:
 
         sub = message.subreddit.display_name
-        action, _ = ItsPaddysDay._parse_command(message.body)
+        action, _ = ItsPaddysDaySync._parse_command(message.body)
 
-        if not action:
-            ItsPaddysDayDB.whitelist_sub(message.subreddit)
-            response = Responses.whitelistSub.replace("*", sub)
-        else:
+        if action:
             response = self._perform_action(message, action, sub)
+
+        else:
+            DB.whitelist_sub(message.subreddit)
+            response = Responses.whitelistSub.replace("*", sub)
+
+            if not conf.dryrun:
+                tmpDataDict.respondedPosts.append(message.id)
+
+            # get parent comment and send to _process_submission
+            parent = message.parent()
+            ItsPaddysDaySync._process_submission(parent)
+
+            # get parent replies and send to _process_submission
+            for comment in parent.comments:
+                ItsPaddysDaySync._process_submission(comment)
 
         return response
 
     def _process_direct_message(self, message: praw.models.Message) -> str:
 
-        action, sub = ItsPaddysDay._parse_command(message.subject)
+        action, sub = ItsPaddysDaySync._parse_command(message.subject)
 
         if not action:
             response = Responses.invalidCommand
@@ -201,9 +194,65 @@ class ItsPaddysDay:
 
         return response
 
+    @staticmethod
+    def _contains_patty(searchStr: str) -> bool:
+        if any((
+                "st patty" in searchStr,
+                "st. patty" in searchStr,
+                "saint patty" in searchStr,
+        )):
+            return True
+        return False
+
+    @staticmethod
+    def _process_submission(submission):
+
+        logger.info(
+            f"{submission.subreddit_name_prefixed}, {datetime.fromtimestamp(submission.created_utc)}, {submission.id}, https://www.reddit.com{submission.permalink}")
+
+        if submission.id in tmpDataDict.respondedPosts:
+            return
+
+        searchStr = ""
+        for attr in ["title", "body", "selftext"]:
+            searchStr += getattr(submission, attr, "").lower() + " "
+
+        if not ItsPaddysDaySync._contains_patty(searchStr):
+            return
+
+        logger.info(f"--> MATCH: {searchStr}")
+
+        if conf.dryrun:
+            return
+
+        submission.reply(Responses.correction)
+        tmpDataDict.respondedPosts.append(submission.id)
+
+
+class ItsPaddysDaySync(_Bot):
+
+    def __init__(self,
+                 reddit_user_name: str,
+                 reddit_password: str,
+                 reddit_client_id: str,
+                 reddit_secret: str,
+                 reddit_user_agent: str,
+                 ratelimit_seconds: int
+                 ):
+
+        self.reddit = praw.Reddit(
+            username=reddit_user_name,
+            password=reddit_password,
+            client_id=reddit_client_id,
+            client_secret=reddit_secret,
+            user_agent=reddit_user_agent,
+            ratelimit_seconds=ratelimit_seconds
+        )
+
     def process_unread_messages(self) -> None:
         logger.info(f"------------------------------")
         logger.info("Processing Unread Messages")
+        logger.info(f"------------------------------")
 
         for message in self.reddit.inbox.unread():
             logger.debug(f"subject: {message.subject}")
@@ -220,60 +269,31 @@ class ItsPaddysDay:
 
             logger.info(f"subject: {message.subject} \nResponse: {response}\n")
 
-    @staticmethod
-    def _contains_patty(searchStr: str) -> bool:
-        if any((
-                "st patty" in searchStr,
-                "st. patty" in searchStr,
-                "saint patty" in searchStr,
-        )):
-            return True
-        return False
-
-    @staticmethod
-    def _process_submission(submission):
-
-        logger.info(f"{submission.subreddit_name_prefixed}, {datetime.fromtimestamp(submission.created_utc)}, {submission.id}, https://www.reddit.com{submission.permalink}]")
-
-        if submission.id in tmpDataDict.respondedPosts:
-            return
-
-        searchStr = ""
-        for attr in ["title", "body", "selftext"]:
-            searchStr += getattr(submission, attr, "").lower() + " "
-
-        if not ItsPaddysDay._contains_patty(searchStr):
-            return
-
-        logger.info(f"--> MATCH: {searchStr}")
-
-        if conf.dryrun:
-            return
-
-        submission.reply(Responses.correction)
-        tmpDataDict.respondedPosts.append(submission.id)
-
     def process_subreddit_posts(self, subreddit: str) -> None:
         logger.info(f"------------------------------")
         logger.info(f"Checking posts in {subreddit}:")
+        logger.info(f"------------------------------")
+
 
         subr = self.reddit.subreddit(subreddit)
 
         for submission in subr.new():
-            ItsPaddysDay._process_submission(submission)
+            ItsPaddysDaySync._process_submission(submission)
 
     def process_subreddit_comments(self, subreddit: str) -> None:
         logger.info(f"------------------------------")
         logger.info(f"Checking comments in {subreddit}:")
+        logger.info(f"------------------------------")
+
 
         subr = self.reddit.subreddit(subreddit)
 
         for submission in subr.comments(limit=None):
-            ItsPaddysDay._process_submission(submission)
+            ItsPaddysDaySync._process_submission(submission)
 
 
 def run_bot() -> None:
-    bot = ItsPaddysDay(
+    bot = ItsPaddysDaySync(
         conf.reddit_user_name,
         conf.reddit_password,
         conf.reddit_client_id,
@@ -284,6 +304,8 @@ def run_bot() -> None:
 
     # check messages
     bot.process_unread_messages()
+
+    return
 
     # check posts
     bot.process_subreddit_posts("+".join(tmpDataDict.whitelistedSubs))
