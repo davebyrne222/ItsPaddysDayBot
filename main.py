@@ -242,8 +242,7 @@ class _Bot:
 
     def _process_submission(self, submission):
 
-        logger.info(
-            f"{submission.subreddit_name_prefixed}, {datetime.fromtimestamp(submission.created_utc)}, {submission.id}, https://www.reddit.com{submission.permalink}")
+        logger.debug(f"{submission.subreddit_name_prefixed}, {datetime.fromtimestamp(submission.created_utc)}, {submission.id}, https://www.reddit.com{submission.permalink}")
 
         if self._db.is_post_responded(submission.id):
             return
@@ -256,6 +255,7 @@ class _Bot:
             return
 
         logger.info(f"--> MATCH: {searchStr}")
+        logger.info(f"{submission.subreddit_name_prefixed}, {datetime.fromtimestamp(submission.created_utc)}, {submission.id}, https://www.reddit.com{submission.permalink}")
 
         if conf.dryrun:
             return
@@ -294,7 +294,6 @@ class ItsPaddysDaySync(_Bot):
         logger.info(f"Checking posts in {subreddit}:")
         logger.info(f"------------------------------")
 
-
         subr = self.reddit.subreddit(subreddit)
 
         for submission in subr.new():
@@ -304,7 +303,6 @@ class ItsPaddysDaySync(_Bot):
         logger.info(f"------------------------------")
         logger.info(f"Checking comments in {subreddit}:")
         logger.info(f"------------------------------")
-
 
         subr = self.reddit.subreddit(subreddit)
 
