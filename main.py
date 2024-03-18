@@ -289,22 +289,26 @@ class ItsPaddysDaySync(_Bot):
 
             logger.info(f"subject: {message.subject} \nResponse: {response}\n")
 
-    def process_subreddit_posts(self, subreddit: str) -> None:
+    def process_subreddit_posts(self) -> None:
+        subreddits = "+".join(self._db.get_whitelisted_subs())
+
         logger.info(f"------------------------------")
-        logger.info(f"Checking posts in {subreddit}:")
+        logger.info(f"Checking posts in {subreddits}:")
         logger.info(f"------------------------------")
 
-        subr = self.reddit.subreddit(subreddit)
+        subr = self.reddit.subreddit(subreddits)
 
         for submission in subr.new():
             self._process_submission(submission)
 
-    def process_subreddit_comments(self, subreddit: str) -> None:
+    def process_subreddit_comments(self) -> None:
+        subreddits = "+".join(self._db.get_whitelisted_subs())
+
         logger.info(f"------------------------------")
-        logger.info(f"Checking comments in {subreddit}:")
+        logger.info(f"Checking comments in {subreddits}:")
         logger.info(f"------------------------------")
 
-        subr = self.reddit.subreddit(subreddit)
+        subr = self.reddit.subreddit(subreddits)
 
         for submission in subr.comments(limit=None):
             self._process_submission(submission)
@@ -324,10 +328,10 @@ def run_bot() -> None:
     bot.process_unread_messages()
 
     # check posts
-    bot.process_subreddit_posts("+".join(bot._db.get_whitelisted_subs()))
+    bot.process_subreddit_posts()
 
     # check comments
-    bot.process_subreddit_comments("+".join(bot._db.get_whitelisted_subs()))
+    bot.process_subreddit_comments()
 
 
 if __name__ == "__main__":
