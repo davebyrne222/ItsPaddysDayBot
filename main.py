@@ -1,6 +1,8 @@
-from dataclasses import dataclass
-from datetime import datetime
+import json
 import re
+from dataclasses import dataclass, asdict, field
+from datetime import datetime
+import traceback
 
 import praw
 import prawcore
@@ -8,9 +10,19 @@ from rich.console import Console
 
 from secret import Configuration
 
-# https://github.com/acini/praw-antiabuse-functions TODO: Use this!
-
 console = Console()
+
+
+@dataclass
+class TmpDataDict:
+    blacklistedSubs: list = field(default_factory=lambda : [])
+    whitelistedSubs: list = field(default_factory=lambda : [])
+    blacklistedUsers: list = field(default_factory=lambda : [])
+    respondedPosts: list = field(default_factory=lambda : [])
+
+    def asdict(self):
+        return asdict(self)
+
 
 @dataclass
 class Responses:
@@ -21,16 +33,13 @@ class Responses:
     suggestion = "Thank you for your suggestion. I have logged it for review."
     invalidSubreddit = "Thank you for your message however, the subreddit you mentioned (*) does not appear to be a" \
                        " valid subreddit"
-    invalidCommand = "I am a bot and unfortunately could not decipher your subject. Please see ?? for a guide on how " \
+    invalidCommand = "I am a bot and unfortunately could not decipher your subject. Please see my profile for a guide on how " \
                      "to message me"
     unauthorised = "I understood your request however, it does not appear you are a moderator of *"
+    correction = "Mo Chara, I think you might be referring to St. Patricks Day, however the correct shorthand spelling is St. Paddy. \n\n I'm a bot"
 
 
 class ItsPaddysDayDB:
-
-    subsTemp = {
-
-    }
 
     @staticmethod
     def add_sub(sub: praw.models.Subreddit):
@@ -44,25 +53,41 @@ class ItsPaddysDayDB:
 
     @staticmethod
     def blacklist_sub(sub: praw.models.Subreddit):
-        return True
+        if sub.display_name not in tmpDataDict.blacklistedSubs:
+            tmpDataDict.blacklistedSubs.append(sub.display_name)
 
     @staticmethod
     def whitelist_sub(sub: praw.models.Subreddit):
-        return True
+        if sub.display_name not in tmpDataDict.whitelistedSubs:
+            tmpDataDict.whitelistedSubs.append(sub.display_name)
 
     @staticmethod
-    def blacklist_user(sub: praw.models.Subreddit):
-        return True
+    def blacklist_user(user: praw.models.Redditor):
+        if user.id not in tmpDataDict.blacklistedUsers:
+            tmpDataDict.blacklistedUsers.append(user.id)
 
     @staticmethod
     def is_user_blacklisted(userId: str):
-        return True
+        return userId in tmpDataDict.blacklistedUsers
 
 
 class ItsPaddysDay:
 
-    def __init__(self, reddit: praw.Reddit):
-        self.reddit = reddit
+    def __init__(self,
+                 reddit_user_name: str,
+                 reddit_password: str,
+                 reddit_client_id: str,
+                 reddit_secret: str,
+                 reddit_user_agent: str
+                 ):
+
+        self.reddit = praw.Reddit(
+            username=reddit_user_name,
+            password=reddit_password,
+            client_id=reddit_client_id,
+            client_secret=reddit_secret,
+            user_agent=reddit_user_agent
+        )
 
     # TODO: add decorator to check author is mod?
     @staticmethod
@@ -161,7 +186,7 @@ class ItsPaddysDay:
         action, _ = ItsPaddysDay._parse_command(message.body)
 
         if not action:
-            ItsPaddysDayDB.add_sub(sub)
+            ItsPaddysDayDB.whitelist_sub(message.subreddit)
             response = Responses.whitelistSub.replace("*", sub)
         else:
             response = self._perform_action(message, action, sub)
@@ -183,7 +208,6 @@ class ItsPaddysDay:
     def process_unread_messages(self) -> None:
 
         console.log("Processing Unread Messages:")
-        processedMessages = 0
 
         for message in self.reddit.inbox.unread():
 
@@ -193,97 +217,127 @@ class ItsPaddysDay:
             else:
                 response = self._process_direct_message(message)
 
-            console.log(f"subject: {message.subject} \nResponse: {response}\n")
+                if not conf.dryrun:
+                    message.reply(response)
+                    message.mark_read()
 
-            # message.reply(response)
+                console.log(f"subject: {message.subject} \nResponse: {response}\n")
 
-            # message.mark_read()
+    @staticmethod
+    def _contains_patty(searchStr: str) -> bool:
+        if any((
+                "st patty" in searchStr,
+                "st. patty" in searchStr,
+                "saint patty" in searchStr,
+        )):
+            return True
+        return False
 
-            processedMessages += 1
+    @staticmethod
+    def _process_submission(submission):
 
-        if processedMessages == 0:
-            console.log("No unread messages")
+        if submission.id in tmpDataDict.respondedPosts:
+            return
+
+        searchStr = ""
+        for attr in ["title", "body", "selftext"]:
+            searchStr += getattr(submission, attr, "").lower() + " "
+
+        if not ItsPaddysDay._contains_patty(searchStr):
+            return
+
+        console.log(f"\[{submission.subreddit_name_prefixed}, {submission.id}, {datetime.fromtimestamp(submission.created_utc)}, https://www.reddit.com{submission.permalink}] \n {getattr(submission, 'title', '')} {getattr(submission, 'body', '')} \n")
+
+        if conf.dryrun:
+            return
+
+        submission.reply(Responses.correction)
+        tmpDataDict.respondedPosts.append(submission.id)
 
     def process_subreddit_posts(self, subreddit: str) -> None:
-        console.print("----------------")
-        console.print(f"Checking posts in {subreddit}:")
+        console.log(f"Checking posts in {subreddit}:")
 
         subr = self.reddit.subreddit(subreddit)
 
         for submission in subr.new():
-            console.print(
-                f"\t - [{submission.id}, {datetime.fromtimestamp(submission.created_utc)}] {submission.title}")
-
-            if "What am I" in submission.title:
-                console.print("///////////////////////")
-                console.print("found!")
-                for comment in submission.comments.list():
-                    console.print(
-                        f"\t - [{comment.id}, {datetime.fromtimestamp(comment.created_utc)}] {comment.body}")
-
-                console.print("///////////////////////")
+            ItsPaddysDay._process_submission(submission)
 
     def process_subreddit_comments(self, subreddit: str) -> None:
-        """ Checks whitelisted subreddits for comments and responds if a comment contains an erroneous pronunciations of
-        St. Patricks Day etc.
-
-        To do:
-        - check if comments contain some version of 'pattys day'
-        - respond if not previously responded to?
-        - add message identifier to database (AWS?) to prevent responding again
-        - use praw-antiabuse-functions?
-        """
+        console.log(f"Checking comments in {subreddit}:")
 
         subr = self.reddit.subreddit(subreddit)
 
-        for comment in subr.comments():
-            console.print("----------------")
-            console.print(comment.selftext)
-            console.print(comment.selftext)
-
-            try:
-                if "bot" in comment.data:
-                    comment.reply("hello world...")
-            except praw.exceptions.APIException:
-                print("probably a rate limit...")
-
-
-def get_subreddits():
-    """TBD: get subreddits from DB"""
-    for subreddit in ["testingground4bots"]:
-        yield subreddit
+        for submission in subr.comments(limit=None):
+            ItsPaddysDay._process_submission(submission)
 
 
 def run_bot() -> None:
-    r = praw.Reddit(
-        username=conf.reddit_user_name,
-        password=conf.reddit_password,
-        client_id=conf.reddit_client_id,
-        client_secret=conf.reddit_secret,
-        user_agent=conf.reddit_user_agent
+    bot = ItsPaddysDay(
+        conf.reddit_user_name,
+        conf.reddit_password,
+        conf.reddit_client_id,
+        conf.reddit_secret,
+        conf.reddit_user_agent
     )
-
-    try:
-        r.user.me()
-    except prawcore.exceptions.ResponseException as e:
-        console.log(f"Invalid user")
-        raise e
-
-    bot = ItsPaddysDay(r)
 
     # check messages
     bot.process_unread_messages()
 
-    # check subreddits
-    # for subreddit in get_subreddits():
-    #     # check posts
-    #     bot.process_subreddit_posts(subreddit)
-    #
-    #     # check comments
-    #     bot.process_subreddit_comments(subreddit)
+    # check posts
+    bot.process_subreddit_posts("+".join(tmpDataDict.whitelistedSubs))
+
+    # check comments
+    bot.process_subreddit_comments("+".join(tmpDataDict.whitelistedSubs))
+
+
+def loadData():
+
+    with open("data.json", "r") as fi:
+        data = json.load(fi)
+
+    tmpDataDict.blacklistedSubs = data.get("blacklistedSubs")
+    tmpDataDict.whitelistedSubs = data.get("whitelistedSubs")
+    tmpDataDict.blacklistedUsers = data.get("blacklistedUsers")
+    tmpDataDict.respondedPosts = data.get("respondedPosts")
+
+def dumpData():
+    dataDict = tmpDataDict.asdict()
+
+    with open("data.json", "w") as fo:
+        json.dump(dataDict, fo)
 
 
 if __name__ == "__main__":
-    conf = Configuration()
 
-    run_bot()
+    with open("log.txt", "a") as fo:
+        fo.write(f"[{datetime.utcnow()}] - Starting\n")
+
+    try:
+        conf = Configuration()
+        tmpDataDict = TmpDataDict()
+
+        with open("correction.md", "r") as file:
+            Responses.correction = file.read()
+
+        loadData()
+        run_bot()
+
+    except Exception as e:
+        msg = f"[{datetime.utcnow()}] - Exception occurred:\n{traceback.format_exc()}\n"
+
+        console.log(msg)
+
+        with open("log.txt", "a") as fo:
+            fo.write(msg)
+
+    else:
+        msg = f"[{datetime.utcnow()}] - Finished Successfully\n"
+
+        console.log(msg)
+
+        with open("log.txt", "a") as fo:
+            fo.write(msg)
+
+    finally:
+        dumpData()
+

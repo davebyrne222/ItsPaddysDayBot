@@ -1,6 +1,10 @@
 # Project specific
 secret.py
-
+*.pem
+deploy.sh
+*.txt
+*.md
+*.json
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
