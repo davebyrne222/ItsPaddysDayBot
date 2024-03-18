@@ -316,7 +316,7 @@ if __name__ == "__main__":
         conf = Configuration()
         tmpDataDict = TmpDataDict()
 
-        with open("correction.md", "r") as file:
+        with open("correction_text.md", "r") as file:
             Responses.correction = file.read()
 
         loadData()
