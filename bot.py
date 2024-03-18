@@ -55,7 +55,7 @@ class _Bot:
         if not isinstance(sub, praw.models.Subreddit):
             response = Responses.invalidSubreddit
 
-        elif not ItsPaddysDaySync._is_author_mod(message.author, sub):
+        elif not ItsPaddysDay._is_author_mod(message.author, sub):
             response = Responses.unauthorised
 
         elif action == "whitelist":
@@ -128,7 +128,7 @@ class _Bot:
         else:
             subr = self.reddit.subreddit(sub) if self._is_valid_sub(sub) else None
 
-            if actionMethod := ItsPaddysDaySync.actionMap.get(action):
+            if actionMethod := ItsPaddysDay.actionMap.get(action):
                 response = actionMethod(message=message, sub=subr)
             else:
                 response = Responses.invalidCommand
@@ -138,7 +138,7 @@ class _Bot:
     def _process_mention(self, message: praw.models.Message) -> str:
 
         sub = message.subreddit.display_name
-        action, _ = ItsPaddysDaySync._parse_command(message.body)
+        action, _ = ItsPaddysDay._parse_command(message.body)
 
         if action:
             response = self._perform_action(message, action, sub)
@@ -162,7 +162,7 @@ class _Bot:
 
     def _process_direct_message(self, message: praw.models.Message) -> str:
 
-        action, sub = ItsPaddysDaySync._parse_command(message.subject)
+        action, sub = ItsPaddysDay._parse_command(message.subject)
 
         if not action:
             response = Responses.invalidCommand
@@ -193,7 +193,7 @@ class _Bot:
         for attr in ["title", "body", "selftext"]:
             searchStr += getattr(submission, attr, "").lower() + " "
 
-        if not ItsPaddysDaySync._contains_patty(searchStr):
+        if not ItsPaddysDay._contains_patty(searchStr):
             return
 
         logger.info(f"--> MATCH: {searchStr}")
@@ -206,10 +206,13 @@ class _Bot:
         self._db.add_responded_post(submission.id)
 
 
-class ItsPaddysDaySync(_Bot):
+class ItsPaddysDay(_Bot):
 
-    def __init__(self, *args):
+    def __init__(self, *args, nPostsLimit=100, nCommentsLimit=None):
         super().__init__(*args)
+
+        self.nPostsLimit = nPostsLimit
+        self.nCommentsLimit = nCommentsLimit
 
     def process_unread_messages(self) -> None:
         logger.info(f"------------------------------")
@@ -231,26 +234,32 @@ class ItsPaddysDaySync(_Bot):
 
             logger.info(f"subject: {message.subject} \nResponse: {response}\n")
 
-    def process_subreddit_posts(self) -> None:
-        subreddits = "+".join(self._db.get_whitelisted_subs())
-
+    def process_subreddit_posts(self, subreddit: str) -> None:
         logger.info(f"------------------------------")
-        logger.info(f"Checking posts in {subreddits}:")
+        logger.info(f"Checking posts in {subreddit}:")
         logger.info(f"------------------------------")
 
-        subr = self.reddit.subreddit(subreddits)
+        subr = self.reddit.subreddit(subreddit)
 
-        for submission in subr.new():
+        for submission in subr.new(limit=self.nPostsLimit):
             self._process_submission(submission)
 
-    def process_subreddit_comments(self) -> None:
-        subreddits = "+".join(self._db.get_whitelisted_subs())
-
+    def process_subreddit_comments(self, subreddit: str) -> None:
         logger.info(f"------------------------------")
-        logger.info(f"Checking comments in {subreddits}:")
+        logger.info(f"Checking comments in {subreddit}:")
         logger.info(f"------------------------------")
 
-        subr = self.reddit.subreddit(subreddits)
+        subr = self.reddit.subreddit(subreddit)
 
-        for submission in subr.comments(limit=None):
+        for submission in subr.comments(limit=self.nCommentsLimit):
             self._process_submission(submission)
+
+    def syncronise(self):
+        """Process unread messages and reviews subreddits (n-posts and n-comments set by nPostsLimit, nCommentsLimit)"""
+        # check messages
+        self.process_unread_messages()
+
+        # check subreddits
+        subreddits = "+".join(self._db.get_whitelisted_subs())
+        self.process_subreddit_posts(subreddits)
+        self.process_subreddit_comments(subreddits)

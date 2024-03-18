@@ -1,39 +1,26 @@
 import praw
 
-from bot import ItsPaddysDaySync
+from bot import ItsPaddysDay
 from logger import logger
 from secret import Configuration
 
 
 def run_bot() -> None:
-    bot = ItsPaddysDaySync(
-        conf.reddit_user_name,
-        conf.reddit_password,
-        conf.reddit_client_id,
-        conf.reddit_secret,
-        conf.reddit_user_agent,
-        conf.praw_rate_timeout,
-        conf.dryrun
-    )
-
-    # check messages
-    bot.process_unread_messages()
-
-    # check posts
-    bot.process_subreddit_posts()
-
-    # check comments
-    bot.process_subreddit_comments()
-
-
-if __name__ == "__main__":
-
-    conf = Configuration()
 
     logger.debug(f"Starting")
 
     try:
-        run_bot()
+        bot = ItsPaddysDay(
+            conf.reddit_user_name,
+            conf.reddit_password,
+            conf.reddit_client_id,
+            conf.reddit_secret,
+            conf.reddit_user_agent,
+            conf.praw_rate_timeout,
+            conf.dryrun
+        )
+
+        bot.syncronise()
 
     except praw.exceptions.RedditAPIException as e:
         logger.exception("API Exception (rate?):")
@@ -43,4 +30,11 @@ if __name__ == "__main__":
 
     else:
         logger.debug(f"Finished Successfully")
+
+
+if __name__ == "__main__":
+
+    conf = Configuration()
+
+    run_bot()
 
