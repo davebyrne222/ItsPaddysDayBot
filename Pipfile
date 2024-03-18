@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 praw = "*"
 rich = "*"
+psycopg2-binary = "*"
 
 [dev-packages]
 
