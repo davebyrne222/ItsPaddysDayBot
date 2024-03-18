@@ -4,6 +4,7 @@ secret.py
 deploy.sh
 *.txt
 *.json
+logs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

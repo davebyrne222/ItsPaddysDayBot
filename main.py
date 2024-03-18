@@ -2,23 +2,19 @@ import json
 import re
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
-import traceback
 
 import praw
 import prawcore
-from rich.console import Console
 
 from secret import Configuration
-
-console = Console()
 
 
 @dataclass
 class TmpDataDict:
-    blacklistedSubs: list = field(default_factory=lambda : [])
-    whitelistedSubs: list = field(default_factory=lambda : [])
-    blacklistedUsers: list = field(default_factory=lambda : [])
-    respondedPosts: list = field(default_factory=lambda : [])
+    blacklistedSubs: list = field(default_factory=lambda: [])
+    whitelistedSubs: list = field(default_factory=lambda: [])
+    blacklistedUsers: list = field(default_factory=lambda: [])
+    respondedPosts: list = field(default_factory=lambda: [])
 
     def asdict(self):
         return asdict(self)
@@ -78,7 +74,8 @@ class ItsPaddysDay:
                  reddit_password: str,
                  reddit_client_id: str,
                  reddit_secret: str,
-                 reddit_user_agent: str
+                 reddit_user_agent: str,
+                 ratelimit_seconds: int
                  ):
 
         self.reddit = praw.Reddit(
@@ -86,12 +83,12 @@ class ItsPaddysDay:
             password=reddit_password,
             client_id=reddit_client_id,
             client_secret=reddit_secret,
-            user_agent=reddit_user_agent
+            user_agent=reddit_user_agent,
+            ratelimit_seconds=ratelimit_seconds
         )
 
-    # TODO: add decorator to check author is mod?
     @staticmethod
-    def _handle_blacklist(message: praw.models.Message, sub: praw.models.Subreddit):
+    def _manage_monitored_subs(action: str, message: praw.models.Message, sub: praw.models.Subreddit):
 
         if not isinstance(sub, praw.models.Subreddit):
             response = Responses.invalidSubreddit
@@ -99,27 +96,26 @@ class ItsPaddysDay:
         elif not ItsPaddysDay._is_author_mod(message.author, sub):
             response = Responses.unauthorised
 
-        else:
-            ItsPaddysDayDB.blacklist_sub(sub)
-            response = Responses.blacklistSub
-
-        return response.replace("*", sub.display_name)
-
-    # TODO: add decorator to check author is mod?
-    @staticmethod
-    def _handle_whitelist(message: praw.models.Message, sub: praw.models.Subreddit):
-
-        if not isinstance(sub, praw.models.Subreddit):
-            response = Responses.invalidSubreddit
-
-        elif not ItsPaddysDay._is_author_mod(message.author, sub):
-            response = Responses.unauthorised
-
-        else:
+        elif action == "whitelist":
             ItsPaddysDayDB.whitelist_sub(sub)
             response = Responses.whitelistSub
 
+        elif action == "blacklist":
+            ItsPaddysDayDB.blacklist_sub(sub)
+            response = Responses.blacklistSub
+
+        else:
+            raise ValueError(f"Invalid value for action ('{action}'). Valid options are 'whitelist' or 'blacklist")
+
         return response.replace("*", sub.display_name)
+
+    @staticmethod
+    def _handle_blacklist(message: praw.models.Message, sub: praw.models.Subreddit):
+        ItsPaddysDay._manage_monitored_subs("blacklist", message, sub)
+
+    @staticmethod
+    def _handle_whitelist(message: praw.models.Message, sub: praw.models.Subreddit):
+        ItsPaddysDay._manage_monitored_subs("whitelist", message, sub)
 
     @staticmethod
     def _handle_suggestion(message: praw.models.Message, sub: praw.models.Subreddit):
@@ -206,10 +202,11 @@ class ItsPaddysDay:
         return response
 
     def process_unread_messages(self) -> None:
-
-        console.log("Processing Unread Messages:")
+        logger.info(f"------------------------------")
+        logger.info("Processing Unread Messages")
 
         for message in self.reddit.inbox.unread():
+            logger.debug(f"subject: {message.subject}")
 
             if message.was_comment:
                 response = self._process_mention(message)
@@ -221,7 +218,7 @@ class ItsPaddysDay:
                     message.reply(response)
                     message.mark_read()
 
-                console.log(f"subject: {message.subject} \nResponse: {response}\n")
+            logger.info(f"subject: {message.subject} \nResponse: {response}\n")
 
     @staticmethod
     def _contains_patty(searchStr: str) -> bool:
@@ -236,6 +233,8 @@ class ItsPaddysDay:
     @staticmethod
     def _process_submission(submission):
 
+        logger.info(f"{submission.subreddit_name_prefixed}, {datetime.fromtimestamp(submission.created_utc)}, {submission.id}, https://www.reddit.com{submission.permalink}]")
+
         if submission.id in tmpDataDict.respondedPosts:
             return
 
@@ -246,7 +245,7 @@ class ItsPaddysDay:
         if not ItsPaddysDay._contains_patty(searchStr):
             return
 
-        console.log(f"\[{submission.subreddit_name_prefixed}, {submission.id}, {datetime.fromtimestamp(submission.created_utc)}, https://www.reddit.com{submission.permalink}] \n {getattr(submission, 'title', '')} {getattr(submission, 'body', '')} \n")
+        logger.info(f"--> MATCH: {searchStr}")
 
         if conf.dryrun:
             return
@@ -255,7 +254,8 @@ class ItsPaddysDay:
         tmpDataDict.respondedPosts.append(submission.id)
 
     def process_subreddit_posts(self, subreddit: str) -> None:
-        console.log(f"Checking posts in {subreddit}:")
+        logger.info(f"------------------------------")
+        logger.info(f"Checking posts in {subreddit}:")
 
         subr = self.reddit.subreddit(subreddit)
 
@@ -263,7 +263,8 @@ class ItsPaddysDay:
             ItsPaddysDay._process_submission(submission)
 
     def process_subreddit_comments(self, subreddit: str) -> None:
-        console.log(f"Checking comments in {subreddit}:")
+        logger.info(f"------------------------------")
+        logger.info(f"Checking comments in {subreddit}:")
 
         subr = self.reddit.subreddit(subreddit)
 
@@ -277,7 +278,8 @@ def run_bot() -> None:
         conf.reddit_password,
         conf.reddit_client_id,
         conf.reddit_secret,
-        conf.reddit_user_agent
+        conf.reddit_user_agent,
+        conf.praw_rate_timeout
     )
 
     # check messages
@@ -291,7 +293,6 @@ def run_bot() -> None:
 
 
 def loadData():
-
     with open("data.json", "r") as fi:
         data = json.load(fi)
 
@@ -299,6 +300,7 @@ def loadData():
     tmpDataDict.whitelistedSubs = data.get("whitelistedSubs")
     tmpDataDict.blacklistedUsers = data.get("blacklistedUsers")
     tmpDataDict.respondedPosts = data.get("respondedPosts")
+
 
 def dumpData():
     dataDict = tmpDataDict.asdict()
@@ -309,35 +311,31 @@ def dumpData():
 
 if __name__ == "__main__":
 
-    with open("log.txt", "a") as fo:
-        fo.write(f"[{datetime.utcnow()}] - Starting\n")
+    conf = Configuration()
+
+    logger = conf.setup_logging()
+    logger.debug(f"Starting")
 
     try:
-        conf = Configuration()
-        tmpDataDict = TmpDataDict()
-
         with open("correction_text.md", "r") as file:
             Responses.correction = file.read()
 
+        tmpDataDict = TmpDataDict()
+
         loadData()
+
         run_bot()
 
+    except praw.exceptions.RedditAPIException as e:
+        logger.exception("API Exception (rate?):")
+
     except Exception as e:
-        msg = f"[{datetime.utcnow()}] - Exception occurred:\n{traceback.format_exc()}\n"
-
-        console.log(msg)
-
-        with open("log.txt", "a") as fo:
-            fo.write(msg)
+        logger.exception("Unhandled Exception occurred:")
 
     else:
-        msg = f"[{datetime.utcnow()}] - Finished Successfully\n"
-
-        console.log(msg)
-
-        with open("log.txt", "a") as fo:
-            fo.write(msg)
+        logger.debug(f"Finished Successfully")
 
     finally:
         dumpData()
+        logger.debug(f"Data written to file")
 
