@@ -1,3 +1,4 @@
+from enum import Enum
 import json
 import re
 from dataclasses import dataclass, asdict, field
@@ -89,9 +90,8 @@ class ItsPaddysDay:
             user_agent=reddit_user_agent
         )
 
-    # TODO: add decorator to check author is mod?
     @staticmethod
-    def _handle_blacklist(message: praw.models.Message, sub: praw.models.Subreddit):
+    def _manage_monitored_subs(action: str, message: praw.models.Message, sub: praw.models.Subreddit):
 
         if not isinstance(sub, praw.models.Subreddit):
             response = Responses.invalidSubreddit
@@ -99,27 +99,27 @@ class ItsPaddysDay:
         elif not ItsPaddysDay._is_author_mod(message.author, sub):
             response = Responses.unauthorised
 
-        else:
-            ItsPaddysDayDB.blacklist_sub(sub)
-            response = Responses.blacklistSub
-
-        return response.replace("*", sub.display_name)
-
-    # TODO: add decorator to check author is mod?
-    @staticmethod
-    def _handle_whitelist(message: praw.models.Message, sub: praw.models.Subreddit):
-
-        if not isinstance(sub, praw.models.Subreddit):
-            response = Responses.invalidSubreddit
-
-        elif not ItsPaddysDay._is_author_mod(message.author, sub):
-            response = Responses.unauthorised
-
-        else:
+        elif action == "whitelist":
             ItsPaddysDayDB.whitelist_sub(sub)
             response = Responses.whitelistSub
 
+        elif action == "blacklist":
+            ItsPaddysDayDB.blacklist_sub(sub)
+            response = Responses.blacklistSub
+
+        else:
+            raise ValueError(f"Invalid value for action ('{action}'). Valid options are 'whitelist' or 'blacklist")
+
         return response.replace("*", sub.display_name)
+
+    @staticmethod
+    def _handle_blacklist(message: praw.models.Message, sub: praw.models.Subreddit):
+        ItsPaddysDay._manage_monitored_subs("blacklist", message, sub)
+
+
+    @staticmethod
+    def _handle_whitelist(message: praw.models.Message, sub: praw.models.Subreddit):
+        ItsPaddysDay._manage_monitored_subs("whitelist", message, sub)
 
     @staticmethod
     def _handle_suggestion(message: praw.models.Message, sub: praw.models.Subreddit):
