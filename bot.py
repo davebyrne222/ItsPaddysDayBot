@@ -120,6 +120,16 @@ class _Bot:
 
         return action, subreddit
 
+    @staticmethod
+    def _contains_patty(searchStr: str) -> bool:
+        if any((
+                "st patty" in searchStr,
+                "st. patty" in searchStr,
+                "saint patty" in searchStr,
+        )):
+            return True
+        return False
+
     def _perform_action(self, message: praw.models.Message, action: str, sub: str) -> str:
 
         if action.lower() not in self.actionMap:
@@ -134,53 +144,6 @@ class _Bot:
                 response = Responses.invalidCommand
 
         return response
-
-    def _process_mention(self, message: praw.models.Message) -> str:
-
-        sub = message.subreddit.display_name
-        action, _ = ItsPaddysDay._parse_command(message.body)
-
-        if action:
-            response = self._perform_action(message, action, sub)
-
-        else:
-            self._db.whitelist_sub(message.subreddit)
-            response = Responses.whitelistSub.replace("*", sub)
-
-            if not self.dryrun:
-                self._db.add_responded_post(message.id)
-
-            # get parent comment and send to _process_submission
-            parent = message.parent()
-            self._process_submission(parent)
-
-            # get parent replies and send to _process_submission
-            for comment in parent.comments:
-                self._process_submission(comment)
-
-        return response
-
-    def _process_direct_message(self, message: praw.models.Message) -> str:
-
-        action, sub = ItsPaddysDay._parse_command(message.subject)
-
-        if not action:
-            response = Responses.invalidCommand
-
-        else:
-            response = self._perform_action(message, action, sub)
-
-        return response
-
-    @staticmethod
-    def _contains_patty(searchStr: str) -> bool:
-        if any((
-                "st patty" in searchStr,
-                "st. patty" in searchStr,
-                "saint patty" in searchStr,
-        )):
-            return True
-        return False
 
     def _process_submission(self, submission):
 
@@ -205,6 +168,70 @@ class _Bot:
         submission.reply(Responses.correction)
         self._db.add_responded_post(submission.id)
 
+    def _process_mention(self, message: praw.models.Message) -> str:
+
+        sub = message.subreddit.display_name
+        action, _ = ItsPaddysDay._parse_command(message.body)
+
+        if action:
+            response = self._perform_action(message, action, sub)
+
+        else:
+            # todo: check if sub is blacklisted
+            self._db.whitelist_sub(message.subreddit)
+            response = Responses.whitelistSub.replace("*", sub)
+
+            if not self.dryrun:
+                self._db.add_responded_post(message.id)
+
+            # get parent comment and send to _process_submission
+            parent = message.parent()
+            self._process_submission(parent)
+
+            # get parent replies and send to _process_submission
+            for comment in parent.comments:
+                self._process_submission(comment)
+
+        return response
+
+    def _process_direct_message(self, message: praw.models.Message) -> None:
+
+        logger.debug(f"subject: {message.subject}")
+
+        if message.was_comment:
+            response = self._process_mention(message)
+
+        else:
+            action, sub = ItsPaddysDay._parse_command(message.subject)
+
+            if not action:
+                response = Responses.invalidCommand
+
+            else:
+                response = self._perform_action(message, action, sub)
+
+        if not self.dryrun:
+            message.reply(response)
+            message.mark_read()
+
+        logger.info(f"subject: {message.subject} \nResponse: {response}\n")
+
+    def _monitor_inbox(self):
+        for message in self.reddit.inbox.stream():
+            self._process_direct_message(message)
+
+    def _monitor_posts(self, subreddit: str):
+        subr = self.reddit.subreddit(subreddit)
+
+        for post in subr.stream.submissions:
+            self._process_submission(post)
+
+    def _monitor_comments(self, subreddit: str):
+        subr = self.reddit.subreddit(subreddit)
+
+        for comment in subr.stream.comments:
+            self._process_submission(comment)
+
 
 class ItsPaddysDay(_Bot):
 
@@ -220,19 +247,7 @@ class ItsPaddysDay(_Bot):
         logger.info(f"------------------------------")
 
         for message in self.reddit.inbox.unread():
-            logger.debug(f"subject: {message.subject}")
-
-            if message.was_comment:
-                response = self._process_mention(message)
-
-            else:
-                response = self._process_direct_message(message)
-
-                if not self.dryrun:
-                    message.reply(response)
-                    message.mark_read()
-
-            logger.info(f"subject: {message.subject} \nResponse: {response}\n")
+            self._process_direct_message(message)
 
     def process_subreddit_posts(self, subreddit: str) -> None:
         logger.info(f"------------------------------")
