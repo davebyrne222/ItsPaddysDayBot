@@ -1,31 +1,11 @@
-from dataclasses import dataclass
-
 import praw
 import prawcore
 from datetime import datetime
 import re
 
-from logger import logger
 from db import DB
-
-
-@dataclass
-class Responses:
-    blacklistSub = "Thank you. * has been blacklisted and I will no longer reply in this subreddit."
-    whitelistSub = "Thank you, I will be glad to start replying in *"
-    blacklistUser = "Thank you. You have been blacklisted and I will no longer reply to your posts or comments"
-    whitelistUser = "Thank you, I will be glad to start replying to your posts and comments"
-    suggestion = "Thank you for your suggestion. I have logged it for review."
-    invalidSubreddit = "Thank you for your message however, the subreddit you mentioned (*) does not appear to be a" \
-                       " valid subreddit"
-    invalidCommand = "I am a bot and unfortunately could not decipher your subject. Please see my profile for a guide on how " \
-                     "to message me"
-    unauthorised = "I understood your request however, it does not appear you are a moderator of *"
-    correction = ""
-
-    def __init__(self):
-        with open("correction_text.md", "r") as file:
-            self.correction = file.read()
+from logger import logger
+from responses import Responses
 
 
 class _Bot:
@@ -48,23 +28,24 @@ class _Bot:
             ratelimit_seconds=ratelimit_seconds
         )
         self._db = DB()
+        self._responses = Responses()
         self.dryrun = dryrun
 
     def _manage_monitored_subs(self, action: str, message: praw.models.Message, sub: praw.models.Subreddit):
 
         if not isinstance(sub, praw.models.Subreddit):
-            response = Responses.invalidSubreddit
+            response = self._responses.invalidSubreddit
 
         elif not ItsPaddysDay._is_author_mod(message.author, sub):
-            response = Responses.unauthorised
+            response = self._responses.unauthorised
 
         elif action == "whitelist":
             self._db.whitelist_sub(sub)
-            response = Responses.whitelistSub
+            response = self._responses.whitelistSub
 
         elif action == "blacklist":
             self._db.blacklist_sub(sub)
-            response = Responses.blacklistSub
+            response = self._responses.blacklistSub
 
         else:
             raise ValueError(f"Invalid value for action ('{action}'). Valid options are 'whitelist' or 'blacklist")
@@ -77,14 +58,13 @@ class _Bot:
     def _handle_whitelist(self, message: praw.models.Message, sub: praw.models.Subreddit):
         self._manage_monitored_subs("whitelist", message, sub)
 
-    @staticmethod
-    def _handle_suggestion(message: praw.models.Message, sub: praw.models.Subreddit):
+    def _handle_suggestion(self, message: praw.models.Message, sub: praw.models.Subreddit):
         # TODO: send message to LevelIntro?
-        return Responses.suggestion
+        return self._responses.suggestion
 
     def _handle_ignoreme(self, message: praw.models.Message, sub: praw.models.Subreddit):
         self._db.blacklist_user(message.author.id)
-        return Responses.blacklistUser
+        return self._responses.blacklistUser
 
     actionMap = {
         "!blacklist": _handle_blacklist,
@@ -133,7 +113,7 @@ class _Bot:
     def _perform_action(self, message: praw.models.Message, action: str, sub: str) -> str:
 
         if action.lower() not in self.actionMap:
-            response = Responses.invalidCommand
+            response = self._responses.invalidCommand
 
         else:
             subr = self.reddit.subreddit(sub) if self._is_valid_sub(sub) else None
@@ -141,7 +121,7 @@ class _Bot:
             if actionMethod := ItsPaddysDay.actionMap.get(action):
                 response = actionMethod(message=message, sub=subr)
             else:
-                response = Responses.invalidCommand
+                response = self._responses.invalidCommand
 
         return response
 
@@ -159,13 +139,20 @@ class _Bot:
         if not ItsPaddysDay._contains_patty(searchStr):
             return
 
-        logger.info(f"--> MATCH: {searchStr}")
-        logger.info(f"{submission.subreddit_name_prefixed}, {datetime.fromtimestamp(submission.created_utc)}, {submission.id}, https://www.reddit.com{submission.permalink}")
+        matchString = [
+            f"\033[92mMATCH\033[0m",
+            f"{submission.subreddit_name_prefixed}",
+            f"{datetime.fromtimestamp(submission.created_utc)}",
+            f"{submission.id}",
+            f"https://www.reddit.com{submission.permalink}"
+        ]
+
+        logger.info(' | '.join(matchString))
 
         if self.dryrun:
             return
 
-        submission.reply(Responses.correction)
+        submission.reply(self._responses.correction)
         self._db.add_responded_post(submission.id)
 
     def _process_mention(self, message: praw.models.Message) -> str:
@@ -179,7 +166,7 @@ class _Bot:
         else:
             # todo: check if sub is blacklisted
             self._db.whitelist_sub(message.subreddit)
-            response = Responses.whitelistSub.replace("*", sub)
+            response = self._responses.whitelistSub.replace("*", sub)
 
             if not self.dryrun:
                 self._db.add_responded_post(message.id)
@@ -205,7 +192,7 @@ class _Bot:
             action, sub = ItsPaddysDay._parse_command(message.subject)
 
             if not action:
-                response = Responses.invalidCommand
+                response = self._responses.invalidCommand
 
             else:
                 response = self._perform_action(message, action, sub)
@@ -242,17 +229,17 @@ class ItsPaddysDay(_Bot):
         self.nCommentsLimit = nCommentsLimit
 
     def process_unread_messages(self) -> None:
-        logger.info(f"------------------------------")
+        # logger.info(f"------------------------------")
         logger.info("Processing Unread Messages")
-        logger.info(f"------------------------------")
+        # logger.info(f"------------------------------")
 
         for message in self.reddit.inbox.unread():
             self._process_direct_message(message)
 
     def process_subreddit_posts(self, subreddit: str) -> None:
-        logger.info(f"------------------------------")
-        logger.info(f"Checking posts in {subreddit}:")
-        logger.info(f"------------------------------")
+        # logger.info(f"------------------------------")
+        logger.info(f"Checking posts in {subreddit}")
+        # logger.info(f"------------------------------")
 
         subr = self.reddit.subreddit(subreddit)
 
@@ -260,9 +247,9 @@ class ItsPaddysDay(_Bot):
             self._process_submission(submission)
 
     def process_subreddit_comments(self, subreddit: str) -> None:
-        logger.info(f"------------------------------")
-        logger.info(f"Checking comments in {subreddit}:")
-        logger.info(f"------------------------------")
+        # logger.info(f"------------------------------")
+        logger.info(f"Checking comments in {subreddit}")
+        # logger.info(f"------------------------------")
 
         subr = self.reddit.subreddit(subreddit)
 
