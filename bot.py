@@ -59,7 +59,7 @@ class _Bot:
         self._manage_monitored_subs("whitelist", message, sub)
 
     def _handle_suggestion(self, message: praw.models.Message, sub: praw.models.Subreddit):
-        # TODO: send message to LevelIntro?
+        # TODO: send message to mods?
         return self._responses.suggestion
 
     def _handle_ignoreme(self, message: praw.models.Message, sub: praw.models.Subreddit):
